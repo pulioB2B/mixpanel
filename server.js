@@ -162,8 +162,8 @@ async function handleOAuthCallback(req, res) {
 // 웹훅 수신
 // ============================================================
 app.post("/webhook/order", function (req, res) {
-  // 수신된 헤더와 바디 전체 로그 (서명 디버그용)
-  console.log("[PF] 웹훅 헤더:", JSON.stringify(req.headers));
+  // 수신된 전체 바디 로그 (member_id 등 실제 필드명 확인용)
+  console.log("[PF] 웹훅 수신 바디 전체:", JSON.stringify(req.body, null, 2));
 
   if (!verifyCafe24Signature(req)) {
     return res.status(401).json({ error: "Invalid signature" });
@@ -173,7 +173,15 @@ app.post("/webhook/order", function (req, res) {
   const resource = data.resource || {};
   const eventCode = resource.event_code || "";
 
-  console.log("[PF] 웹훅 수신:", eventCode, resource.order_id);
+  // member_id 관련 필드 전체 출력 (실제 필드명 확인용)
+  console.log("[PF] member 관련 필드:", {
+    member_id: resource.member_id,
+    buyer_id: resource.buyer_id,
+    user_id: resource.user_id,
+    member_email: resource.member_email,
+    buyer_member_id: resource.buyer_member_id,
+  });
+  console.log("[PF] 웹훅 이벤트:", eventCode, "/ 주문번호:", resource.order_id);
 
   if (eventCode === "create_order") {
     handleCompleteOrder(data, res);
@@ -189,8 +197,11 @@ app.post("/webhook/order", function (req, res) {
 
 function handleCompleteOrder(data, res) {
   const r = data.resource || {};
+
+  // distinct_id: 회원이면 member_id, 비회원이면 guest_{order_id}
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
 
+  // 상품 목록 파싱
   const productCodes = r.ordering_product_code
     ? r.ordering_product_code.split(",").map((s) => s.trim())
     : [];
@@ -203,6 +214,18 @@ function handleCompleteOrder(data, res) {
     item_product_name: productNames[i] || "",
   }));
 
+  // order_date KST → UTC 변환 (믹스패널 시간 통일)
+  // 카페24 order_date 예: "2020-07-17T15:28:14+09:00"
+  let orderDateUTC = r.order_date || "";
+  let paymentDateUTC = r.payment_date || "";
+  try {
+    if (r.order_date) orderDateUTC = new Date(r.order_date).toISOString();
+    if (r.payment_date) paymentDateUTC = new Date(r.payment_date).toISOString();
+  } catch (e) {}
+
+  // 첫 번째 상품명 (order_first_item_name)
+  const firstItemName = productNames[0] || "";
+
   const props = {
     mall_id: r.mall_id || "",
     shop_no: r.event_shop_no || 1,
@@ -210,8 +233,12 @@ function handleCompleteOrder(data, res) {
     buyer_member_id: r.member_id || "",
     buyer_is_guest: !r.member_id,
     $insert_id: "complete_order_" + r.order_id,
-    order_date: r.order_date || "",
-    payment_date: r.payment_date || "",
+
+    // 날짜 (UTC 변환)
+    order_date: orderDateUTC,
+    payment_date: paymentDateUTC,
+
+    // 주문 정보
     payment_method: r.payment_method || "",
     payment_gateway: r.payment_gateway_name || "",
     order_place: r.order_place_name || "",
@@ -219,18 +246,24 @@ function handleCompleteOrder(data, res) {
     currency: r.currency || "KRW",
     is_paid: r.paid === "T",
     order_from_mobile: r.order_from_mobile === "T",
+
+    // 금액
     order_price_amount: parseFloat(r.order_price_amount) || 0,
     actual_payment_amount: parseFloat(r.actual_payment_amount) || 0,
     mileage_spent_amount: parseFloat(r.mileage_spent_amount) || 0,
     membership_discount_amount: parseFloat(r.membership_discount_amount) || 0,
     shipping_fee: parseFloat(r.shipping_fee) || 0,
+
+    // 배송
     shipping_type: r.shipping_type || "",
     shipping_status: r.shipping_status || "",
-    shipping_message: r.shipping_message || "",
-    buyer_name: r.buyer_name || "",
-    buyer_email: r.buyer_email || "",
-    buyer_cellphone: r.buyer_cellphone || "",
-    items_detail: items,
+
+    // 상품 요약
+    order_first_item_name: firstItemName,
+    order_item_count: productCodes.length,
+    order_detail: items,
+
+    // 개인정보 미수집: buyer_name, buyer_email, buyer_cellphone, buyer_phone 제외
   };
 
   mp.track("Complete Order", props, { distinct_id: distinctId });
@@ -247,6 +280,12 @@ function handleCancelOrder(data, res) {
   const r = data.resource || {};
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
 
+  // 날짜 UTC 변환
+  let cancelDateUTC = r.cancel_date || r.order_date || "";
+  try {
+    if (cancelDateUTC) cancelDateUTC = new Date(cancelDateUTC).toISOString();
+  } catch (e) {}
+
   const props = {
     mall_id: r.mall_id || "",
     shop_no: r.event_shop_no || 1,
@@ -254,14 +293,13 @@ function handleCancelOrder(data, res) {
     buyer_member_id: r.member_id || "",
     buyer_is_guest: !r.member_id,
     $insert_id: "cancel_order_" + r.order_id,
-    cancel_date: r.cancel_date || r.order_date || "",
+    cancel_date: cancelDateUTC,
     payment_method: r.payment_method || "",
     order_price_amount: parseFloat(r.order_price_amount) || 0,
     actual_payment_amount: parseFloat(r.actual_payment_amount) || 0,
     refund_amount: parseFloat(r.refund_amount) || 0,
     cancel_reason: r.cancel_reason || "",
-    buyer_name: r.buyer_name || "",
-    buyer_cellphone: r.buyer_cellphone || "",
+    // 개인정보 미수집: buyer_name, buyer_cellphone 제외
   };
 
   mp.track("Cancel Order Item", props, { distinct_id: distinctId });
