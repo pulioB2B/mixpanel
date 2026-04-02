@@ -224,7 +224,7 @@ function handleCompleteOrder(data, res) {
     buyer_member_id: r.member_id || "",
     buyer_is_guest: !r.member_id,
     $insert_id: "complete_order_" + r.order_id,
-
+    distinctId: distinctId,
     order_date: r.order_date || "",
     payment_date: r.payment_date || "",
 
@@ -275,6 +275,7 @@ function handleCancelOrder(data, res) {
     shop_no: r.event_shop_no || 1,
     order_id: r.order_id || "",
     buyer_member_id: r.member_id || "",
+    distinctId: distinctId,
     buyer_is_guest: !r.member_id,
     $insert_id: "cancel_order_" + r.order_id,
     cancel_date: r.cancel_date || r.order_date || "",
