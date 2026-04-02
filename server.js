@@ -214,15 +214,6 @@ function handleCompleteOrder(data, res) {
     item_product_name: productNames[i] || "",
   }));
 
-  // order_date KST → UTC 변환 (믹스패널 시간 통일)
-  // 카페24 order_date 예: "2020-07-17T15:28:14+09:00"
-  let orderDateUTC = r.order_date || "";
-  let paymentDateUTC = r.payment_date || "";
-  try {
-    if (r.order_date) orderDateUTC = new Date(r.order_date).toISOString();
-    if (r.payment_date) paymentDateUTC = new Date(r.payment_date).toISOString();
-  } catch (e) {}
-
   // 첫 번째 상품명 (order_first_item_name)
   const firstItemName = productNames[0] || "";
 
@@ -234,9 +225,8 @@ function handleCompleteOrder(data, res) {
     buyer_is_guest: !r.member_id,
     $insert_id: "complete_order_" + r.order_id,
 
-    // 날짜 (UTC 변환)
-    order_date: orderDateUTC,
-    payment_date: paymentDateUTC,
+    order_date: r.order_date || "",
+    payment_date: r.payment_date || "",
 
     // 주문 정보
     payment_method: r.payment_method || "",
@@ -280,12 +270,6 @@ function handleCancelOrder(data, res) {
   const r = data.resource || {};
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
 
-  // 날짜 UTC 변환
-  let cancelDateUTC = r.cancel_date || r.order_date || "";
-  try {
-    if (cancelDateUTC) cancelDateUTC = new Date(cancelDateUTC).toISOString();
-  } catch (e) {}
-
   const props = {
     mall_id: r.mall_id || "",
     shop_no: r.event_shop_no || 1,
@@ -293,7 +277,7 @@ function handleCancelOrder(data, res) {
     buyer_member_id: r.member_id || "",
     buyer_is_guest: !r.member_id,
     $insert_id: "cancel_order_" + r.order_id,
-    cancel_date: cancelDateUTC,
+    cancel_date: r.cancel_date || r.order_date || "",
     payment_method: r.payment_method || "",
     order_price_amount: parseFloat(r.order_price_amount) || 0,
     actual_payment_amount: parseFloat(r.actual_payment_amount) || 0,
