@@ -70,6 +70,21 @@ function verifyCafe24Signature(req) {
 // }
 // ============================================================
 
+app.get("/", function (req, res) {
+  const code = req.query.code;
+  const mallId = req.query.mall_id;
+
+  if (code) {
+    // [중요] 여기서 원래는 code를 가지고 Access Token을 발급받아야 설치가 완료됩니다.
+    // 하지만 단순 웹훅용이라면, 일단 카페24가 요청을 보냈을 때 화면을 보여주는 것만으로도
+    // 브라우저상에서 설치 프로세스가 진행될 수 있습니다.
+    console.log(`[PF] 설치 요청 수신: 쇼핑몰=${mallId}, 코드=${code}`);
+    res.send(`<h1>앱 설치가 진행 중입니다.</h1><p>쇼핑몰: ${mallId}</p>`);
+  } else {
+    res.send("PanelFlow 웹훅 서버가 작동 중입니다.");
+  }
+});
+
 // ============================================================
 // Complete Order 웹훅
 // 이벤트 코드: create_order (주문 생성 + paid: "T" 확인)
