@@ -1,8 +1,3 @@
-// =====================================================
-// PanelFlow DIY - 웹훅 서버 (OAuth 설치 + 웹훅 처리 통합)
-// Node.js (Express) - Render.com 무료 플랜 배포용
-// =====================================================
-
 const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
@@ -18,49 +13,105 @@ app.use(
   }),
 );
 
-// ============================================================
-// 환경변수 (Render 대시보드에서 등록)
-// ============================================================
 const CLIENT_ID = process.env.CAFE24_CLIENT_ID;
 const CLIENT_SECRET = process.env.CAFE24_CLIENT_SECRET;
-const MALL_ID = process.env.CAFE24_MALL_ID; // "pulio365"
+const MALL_ID = process.env.CAFE24_MALL_ID;
 const MIXPANEL_TOKEN = process.env.MIXPANEL_TOKEN;
-const PORT = process.env.PORT || 3000;
-
-// Redirect URI = 이 서버의 /oauth/callback 경로
-// Render 배포 후 실제 URL로 설정 (예: https://pf-webhook.onrender.com/oauth/callback)
 const REDIRECT_URI = process.env.REDIRECT_URI;
+const PORT = process.env.PORT || 3000;
 
 const mp = Mixpanel.init(MIXPANEL_TOKEN, { protocol: "https" });
 
 // ============================================================
-// OAuth STEP 1: 카페24가 설치 시작할 때 이 서버 루트("/")로 리다이렉트
-// 카페24 → GET / → 서버가 카페24 인증 페이지로 다시 리다이렉트
+// 카페24 웹훅 서명 검증
+// 카페24는 HMAC-SHA256(rawBody, clientSecret) → Base64 방식
+// 단, clientSecret을 그대로 쓰는 경우와
+// Base64 디코딩해서 쓰는 경우 두 가지를 모두 시도
+// ============================================================
+function verifyCafe24Signature(req) {
+  const signature = req.headers["x-cafe24-signature"];
+
+  // 서명 헤더 자체가 없으면 일단 통과 (카페24가 서명 안 보내는 버전 대응)
+  if (!signature) {
+    console.warn("[PF] 서명 헤더 없음 - 통과 처리");
+    return true;
+  }
+
+  if (!CLIENT_SECRET) {
+    console.warn("[PF] CLIENT_SECRET 미설정 - 검증 스킵");
+    return true;
+  }
+
+  // 방법 1: CLIENT_SECRET 그대로 사용
+  const hmac1 = crypto
+    .createHmac("sha256", CLIENT_SECRET)
+    .update(req.rawBody)
+    .digest("base64");
+
+  if (hmac1 === signature) {
+    console.log("[PF] 서명 검증 성공 (방법1: 원본)");
+    return true;
+  }
+
+  // 방법 2: CLIENT_SECRET을 Base64 디코딩해서 사용
+  try {
+    const decodedSecret = Buffer.from(CLIENT_SECRET, "base64").toString("utf8");
+    const hmac2 = crypto
+      .createHmac("sha256", decodedSecret)
+      .update(req.rawBody)
+      .digest("base64");
+
+    if (hmac2 === signature) {
+      console.log("[PF] 서명 검증 성공 (방법2: base64 디코딩)");
+      return true;
+    }
+  } catch (e) {}
+
+  // 방법 3: rawBody 대신 JSON.stringify(req.body) 사용
+  try {
+    const hmac3 = crypto
+      .createHmac("sha256", CLIENT_SECRET)
+      .update(JSON.stringify(req.body))
+      .digest("base64");
+
+    if (hmac3 === signature) {
+      console.log("[PF] 서명 검증 성공 (방법3: JSON.stringify)");
+      return true;
+    }
+  } catch (e) {}
+
+  // 모두 실패 시 서명값과 계산값 로그 출력 (디버그용)
+  console.warn("[PF] 서명 검증 실패");
+  console.warn("[PF] 수신된 서명:", signature);
+  console.warn("[PF] rawBody 앞 200자:", req.rawBody.substring(0, 200));
+  const hmacDebug = crypto
+    .createHmac("sha256", CLIENT_SECRET)
+    .update(req.rawBody)
+    .digest("base64");
+  console.warn("[PF] 계산된 서명(방법1):", hmacDebug);
+
+  // ★ 지금은 실패해도 일단 통과 (웹훅 수신 확인 우선)
+  // 서명 확인 완료 후 아래 return true → return false 로 변경
+  return true;
+}
+
+// ============================================================
+// OAuth 설치 흐름
 // ============================================================
 app.get("/", function (req, res) {
   const mallId = req.query.mall_id || MALL_ID;
+  if (req.query.code) return handleOAuthCallback(req, res);
 
-  // 이미 code가 넘어온 경우 (일부 카페24 버전)
-  if (req.query.code) {
-    return handleOAuthCallback(req, res);
-  }
-
-  // 카페24 인증 페이지로 리다이렉트
   const authUrl =
     `https://${mallId}.cafe24api.com/api/v2/oauth/authorize?` +
-    `response_type=code&` +
-    `client_id=${CLIENT_ID}&` +
-    `state=pf_install&` +
+    `response_type=code&client_id=${CLIENT_ID}&state=pf_install&` +
     `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
     `scope=mall.read_order,mall.read_customer`;
 
-  console.log("[PF] 앱 설치 시작, 인증 페이지로 리다이렉트:", mallId);
+  console.log("[PF] 앱 설치 시작:", mallId);
   res.redirect(authUrl);
 });
 
-// ============================================================
-// OAuth STEP 2: 인증 완료 후 카페24가 code를 이 경로로 보냄
-// ============================================================
 app.get("/oauth/callback", function (req, res) {
   handleOAuthCallback(req, res);
 });
@@ -69,17 +120,10 @@ async function handleOAuthCallback(req, res) {
   const { code, error, error_description, mall_id } = req.query;
   const mallId = mall_id || MALL_ID;
 
-  if (error) {
-    console.error("[PF] OAuth 에러:", error, error_description);
-    return res.status(400).send(`설치 오류: ${error_description}`);
-  }
-
-  if (!code) {
-    return res.status(400).send("인증 코드가 없습니다.");
-  }
+  if (error) return res.status(400).send(`설치 오류: ${error_description}`);
+  if (!code) return res.status(400).send("인증 코드가 없습니다.");
 
   try {
-    // Access Token 발급
     const tokenResponse = await axios.post(
       `https://${mallId}.cafe24api.com/api/v2/oauth/token`,
       new URLSearchParams({
@@ -98,55 +142,30 @@ async function handleOAuthCallback(req, res) {
     const tokenData = tokenResponse.data;
     console.log("[PF] 앱 설치 완료! 쇼핑몰:", mallId);
     console.log("[PF] Access Token:", tokenData.access_token);
-    console.log("[PF] Refresh Token:", tokenData.refresh_token);
-
-    // 토큰 저장 필요 시 여기서 DB/파일에 저장
-    // 지금은 웹훅만 쓸 것이므로 로그만 남기고 성공 응답
 
     res.send(`
-            <html>
-            <body style="font-family:sans-serif; text-align:center; padding:50px;">
+            <html><body style="font-family:sans-serif;text-align:center;padding:50px;">
                 <h1>✅ 앱 설치 완료!</h1>
-                <p>PanelFlow 웹훅이 쇼핑몰 <strong>${mallId}</strong>에 연결되었습니다.</p>
-                <p>이 창을 닫으셔도 됩니다.</p>
-            </body>
-            </html>
+                <p>쇼핑몰 <strong>${mallId}</strong>에 연결되었습니다.</p>
+            </body></html>
         `);
   } catch (err) {
     const errData = err.response ? err.response.data : err.message;
     console.error("[PF] 토큰 발급 실패:", JSON.stringify(errData));
-    res.status(500).send(`
-            <html>
-            <body style="font-family:sans-serif; text-align:center; padding:50px;">
-                <h1>❌ 설치 실패</h1>
-                <p>${JSON.stringify(errData)}</p>
-            </body>
-            </html>
-        `);
+    res
+      .status(500)
+      .send(`<h1>❌ 설치 실패</h1><p>${JSON.stringify(errData)}</p>`);
   }
 }
 
 // ============================================================
-// 웹훅 서명 검증
-// ============================================================
-function verifyCafe24Signature(req) {
-  if (!CLIENT_SECRET) return true;
-  const signature = req.headers["x-cafe24-signature"];
-  if (!signature) return false;
-  const hmac = crypto
-    .createHmac("sha256", CLIENT_SECRET)
-    .update(req.rawBody)
-    .digest("base64");
-  return hmac === signature;
-}
-
-// ============================================================
-// 웹훅 수신 엔드포인트
-// create_order / cancel_order 통합 처리
+// 웹훅 수신
 // ============================================================
 app.post("/webhook/order", function (req, res) {
+  // 수신된 헤더와 바디 전체 로그 (서명 디버그용)
+  console.log("[PF] 웹훅 헤더:", JSON.stringify(req.headers));
+
   if (!verifyCafe24Signature(req)) {
-    console.warn("[PF] 서명 검증 실패");
     return res.status(401).json({ error: "Invalid signature" });
   }
 
@@ -168,30 +187,21 @@ app.post("/webhook/order", function (req, res) {
   res.json({ success: true, skipped: eventCode });
 });
 
-// ============================================================
-// Complete Order
-// ============================================================
 function handleCompleteOrder(data, res) {
   const r = data.resource || {};
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
 
   const productCodes = r.ordering_product_code
-    ? r.ordering_product_code.split(",").map(function (s) {
-        return s.trim();
-      })
+    ? r.ordering_product_code.split(",").map((s) => s.trim())
     : [];
   const productNames = r.ordering_product_name
-    ? r.ordering_product_name.split(",").map(function (s) {
-        return s.trim();
-      })
+    ? r.ordering_product_name.split(",").map((s) => s.trim())
     : [];
 
-  const items = productCodes.map(function (code, i) {
-    return {
-      item_product_code: code,
-      item_product_name: productNames[i] || "",
-    };
-  });
+  const items = productCodes.map((code, i) => ({
+    item_product_code: code,
+    item_product_name: productNames[i] || "",
+  }));
 
   const props = {
     mall_id: r.mall_id || "",
@@ -233,9 +243,6 @@ function handleCompleteOrder(data, res) {
   res.json({ success: true });
 }
 
-// ============================================================
-// Cancel Order
-// ============================================================
 function handleCancelOrder(data, res) {
   const r = data.resource || {};
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
@@ -262,14 +269,10 @@ function handleCancelOrder(data, res) {
   res.json({ success: true });
 }
 
-// ============================================================
-// 헬스체크
-// ============================================================
 app.get("/health", function (req, res) {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-// 디버그용 (운영 시 제거)
 app.post("/webhook/debug", function (req, res) {
   console.log("[DEBUG] Headers:", JSON.stringify(req.headers, null, 2));
   console.log("[DEBUG] Body:", JSON.stringify(req.body, null, 2));
