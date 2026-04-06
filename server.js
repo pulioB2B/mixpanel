@@ -195,6 +195,28 @@ app.post("/webhook/order", function (req, res) {
   res.json({ success: true, skipped: eventCode });
 });
 
+function resolvePaymentGateway(r) {
+  // gateway명이 있으면 그대로 사용
+  if (r.payment_gateway_name && r.payment_gateway_name.trim()) {
+    return r.payment_gateway_name.trim();
+  }
+  // easypay명이 있으면 사용 (네이버페이, 카카오페이 등 간편결제)
+  if (r.easypay_name && r.easypay_name.trim()) {
+    return r.easypay_name.trim();
+  }
+  // 빈 스트링인 경우 payment_method 코드로 추론
+  const methodMap = {
+    cash: "무통장입금",
+    tcash: "실시간계좌이체",
+    icash: "가상계좌",
+    card: "카드결제",
+    cell: "휴대폰결제",
+    mileage: "적립금",
+    deposit: "예치금",
+  };
+  return methodMap[r.payment_method] || r.payment_method || "";
+}
+
 function handleCompleteOrder(data, res) {
   const r = data.resource || {};
 
@@ -227,10 +249,11 @@ function handleCompleteOrder(data, res) {
     distinct_id: distinctId,
     order_date: r.order_date || "",
     payment_date: r.payment_date || "",
+    buyer_social_service_name: r.buyer_social_service_name || "",
 
     // 주문 정보
     payment_method: r.payment_method || "",
-    payment_gateway: r.payment_gateway_name || "",
+    payment_gateway: resolvePaymentGateway(r),
     order_place: r.order_place_name || "",
     order_place_id: r.order_place_id || "",
     currency: r.currency || "KRW",
@@ -256,7 +279,7 @@ function handleCompleteOrder(data, res) {
     // 개인정보 미수집: buyer_name, buyer_email, buyer_cellphone, buyer_phone 제외
   };
 
-  mp.track("Complete Order", props, { distinct_id: distinctId });
+  mp.track("Complete Order", props);
   console.log(
     "[PF] Complete Order tracked:",
     r.order_id,
@@ -280,14 +303,16 @@ function handleCancelOrder(data, res) {
     $insert_id: "cancel_order_" + r.order_id,
     cancel_date: r.cancel_date || r.order_date || "",
     payment_method: r.payment_method || "",
+    payment_gateway: resolvePaymentGateway(r),
     order_price_amount: parseFloat(r.order_price_amount) || 0,
     actual_payment_amount: parseFloat(r.actual_payment_amount) || 0,
     refund_amount: parseFloat(r.refund_amount) || 0,
     cancel_reason: r.cancel_reason || "",
+    buyer_social_service_name: r.buyer_social_service_name || "",
     // 개인정보 미수집: buyer_name, buyer_cellphone 제외
   };
 
-  mp.track("Cancel Order Item", props, { distinct_id: distinctId });
+  mp.track("Cancel Order Item", props);
   console.log("[PF] Cancel Order tracked:", r.order_id);
   res.json({ success: true });
 }
