@@ -312,7 +312,7 @@ function handleCancelOrder(data, res) {
     // 개인정보 미수집: buyer_name, buyer_cellphone 제외
   };
 
-  mp.track("Cancel Order Item", props);
+  mp.track("Cancel Order", props);
   console.log("[PF] Cancel Order tracked:", r.order_id);
   res.json({ success: true });
 }
