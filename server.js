@@ -161,6 +161,22 @@ async function handleOAuthCallback(req, res) {
 // ============================================================
 // 웹훅 수신
 // ============================================================
+
+// 회원가입 & 로그인
+app.post("/webhook/member", function (req, res) {
+  console.log("[PF] 웹훅 수신 바디 전체:", JSON.stringify(req.body, null, 2));
+
+  if (!verifyCafe24Signature(req)) {
+    return res.status(401).json({ error: "Invalid signature" });
+  }
+
+  const data = req.body;
+  console.log("[PF] 웹훅 이벤트:", data.event_no);
+
+  res.json({ success: true });
+});
+
+// 주문 생성 & 취소
 app.post("/webhook/order", function (req, res) {
   // 수신된 전체 바디 로그 (member_id 등 실제 필드명 확인용)
   console.log("[PF] 웹훅 수신 바디 전체:", JSON.stringify(req.body, null, 2));
