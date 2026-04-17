@@ -23,76 +23,58 @@ const PORT = process.env.PORT || 3000;
 const mp = Mixpanel.init(MIXPANEL_TOKEN, { protocol: "https" });
 
 // ============================================================
-// 카페24 웹훅 서명 검증
-// 카페24는 HMAC-SHA256(rawBody, clientSecret) → Base64 방식
-// 단, clientSecret을 그대로 쓰는 경우와
-// Base64 디코딩해서 쓰는 경우 두 가지를 모두 시도
+// 서명 검증
 // ============================================================
 function verifyCafe24Signature(req) {
   const signature = req.headers["x-cafe24-signature"];
-
-  // 서명 헤더 자체가 없으면 일단 통과 (카페24가 서명 안 보내는 버전 대응)
   if (!signature) {
-    console.warn("[PF] 서명 헤더 없음 - 통과 처리");
+    console.warn("[PF] 서명 헤더 없음 - 통과");
     return true;
   }
-
   if (!CLIENT_SECRET) {
-    console.warn("[PF] CLIENT_SECRET 미설정 - 검증 스킵");
+    console.warn("[PF] CLIENT_SECRET 미설정 - 스킵");
     return true;
   }
 
-  // 방법 1: CLIENT_SECRET 그대로 사용
   const hmac1 = crypto
     .createHmac("sha256", CLIENT_SECRET)
     .update(req.rawBody)
     .digest("base64");
-
   if (hmac1 === signature) {
-    console.log("[PF] 서명 검증 성공 (방법1: 원본)");
+    console.log("[PF] 서명 검증 성공 (방법1)");
     return true;
   }
 
-  // 방법 2: CLIENT_SECRET을 Base64 디코딩해서 사용
   try {
-    const decodedSecret = Buffer.from(CLIENT_SECRET, "base64").toString("utf8");
+    const decoded = Buffer.from(CLIENT_SECRET, "base64").toString("utf8");
     const hmac2 = crypto
-      .createHmac("sha256", decodedSecret)
+      .createHmac("sha256", decoded)
       .update(req.rawBody)
       .digest("base64");
-
     if (hmac2 === signature) {
-      console.log("[PF] 서명 검증 성공 (방법2: base64 디코딩)");
+      console.log("[PF] 서명 검증 성공 (방법2)");
       return true;
     }
   } catch (e) {}
 
-  // 방법 3: rawBody 대신 JSON.stringify(req.body) 사용
   try {
     const hmac3 = crypto
       .createHmac("sha256", CLIENT_SECRET)
       .update(JSON.stringify(req.body))
       .digest("base64");
-
     if (hmac3 === signature) {
-      console.log("[PF] 서명 검증 성공 (방법3: JSON.stringify)");
+      console.log("[PF] 서명 검증 성공 (방법3)");
       return true;
     }
   } catch (e) {}
 
-  // 모두 실패 시 서명값과 계산값 로그 출력 (디버그용)
-  console.warn("[PF] 서명 검증 실패");
-  console.warn("[PF] 수신된 서명:", signature);
-  console.warn("[PF] rawBody 앞 200자:", req.rawBody.substring(0, 200));
+  console.warn("[PF] 서명 검증 실패 - 수신:", signature);
   const hmacDebug = crypto
     .createHmac("sha256", CLIENT_SECRET)
     .update(req.rawBody)
     .digest("base64");
-  console.warn("[PF] 계산된 서명(방법1):", hmacDebug);
-
-  // ★ 지금은 실패해도 일단 통과 (웹훅 수신 확인 우선)
-  // 서명 확인 완료 후 아래 return true → return false 로 변경
-  return true;
+  console.warn("[PF] 계산:", hmacDebug);
+  return true; // 확인 완료 후 false로 변경
 }
 
 // ============================================================
@@ -128,7 +110,7 @@ async function handleOAuthCallback(req, res) {
       `https://${mallId}.cafe24api.com/api/v2/oauth/token`,
       new URLSearchParams({
         grant_type: "authorization_code",
-        code: code,
+        code,
         redirect_uri: REDIRECT_URI,
       }),
       {
@@ -138,17 +120,10 @@ async function handleOAuthCallback(req, res) {
         },
       },
     );
-
-    const tokenData = tokenResponse.data;
-    console.log("[PF] 앱 설치 완료! 쇼핑몰:", mallId);
-    console.log("[PF] Access Token:", tokenData.access_token);
-
-    res.send(`
-            <html><body style="font-family:sans-serif;text-align:center;padding:50px;">
-                <h1>✅ 앱 설치 완료!</h1>
-                <p>쇼핑몰 <strong>${mallId}</strong>에 연결되었습니다.</p>
-            </body></html>
-        `);
+    console.log("[PF] 앱 설치 완료:", mallId, tokenResponse.data.access_token);
+    res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:50px;">
+            <h1>✅ 앱 설치 완료!</h1><p>쇼핑몰 <strong>${mallId}</strong>에 연결되었습니다.</p>
+        </body></html>`);
   } catch (err) {
     const errData = err.response ? err.response.data : err.message;
     console.error("[PF] 토큰 발급 실패:", JSON.stringify(errData));
@@ -159,27 +134,144 @@ async function handleOAuthCallback(req, res) {
 }
 
 // ============================================================
-// 웹훅 수신
+// 웹훅 수신 - 회원 (가입 / SNS 연동 / 로그인)
+// event_no는 숫자로 오는 경우와 문자열로 오는 경우 모두 대응
 // ============================================================
-
-// 회원가입 & 로그인
 app.post("/webhook/member", function (req, res) {
-  console.log("[PF] 웹훅 수신 바디 전체:", JSON.stringify(req.body, null, 2));
+  console.log("=== MEMBER WEBHOOK ARRIVED ===");
+  console.log("[PF] 웹훅 수신 바디:", JSON.stringify(req.body, null, 2));
 
   if (!verifyCafe24Signature(req)) {
     return res.status(401).json({ error: "Invalid signature" });
   }
 
   const data = req.body;
-  console.log("[PF] 웹훅 이벤트:", data.event_no);
+  const eventNo = String(data.event_no); // 숫자/문자열 모두 대응
 
-  res.json({ success: true });
+  console.log("[PF] 웹훅 이벤트 번호:", eventNo);
+
+  if (eventNo === "90032") {
+    console.log("[PF] 신규 회원가입");
+    handleCompleteSignUp(data, res);
+    return;
+  }
+  if (eventNo === "90063") {
+    console.log("[PF] SNS 계정 연동");
+    handleSNSAccountLinking(data, res);
+    return;
+  }
+  if (eventNo === "90143") {
+    console.log("[PF] 회원 로그인");
+    handleSignIn(data, res);
+    return;
+  }
+
+  res.json({ success: true, skipped: eventNo });
 });
 
-// 주문 생성 & 취소
+// ============================================================
+// Complete Sign Up (event_no: 90032)
+// 샘플 페이로드:
+// resource.member_id, group_no, created_date, member_authentication,
+// sms, news_mail, total_mileage, available_mileage,
+// recommend_id, use_mobile_app, member_type
+// 개인정보 미수집: name, nick_name, birthday, gender, phone, cellphone, email
+// ============================================================
+function handleCompleteSignUp(data, res) {
+  const r = data.resource || {};
+
+  const props = {
+    mall_id: r.mall_id || "",
+    shop_no: r.event_shop_no || 1,
+    $insert_id: "sign_up_" + r.member_id,
+    distinct_id: r.member_id || "",
+
+    // 회원 정보
+    member_id: r.member_id || "",
+    group_no: r.group_no || "",
+    created_date: r.created_date || "",
+    member_authentication: r.member_authentication || "",
+    marketing_sms: r.sms === "T",
+    marketing_email: r.news_mail === "T",
+    use_mobile_app: r.use_mobile_app === "T",
+    member_type: r.member_type || "", // p:개인 c:사업자 f:외국인
+    recommend_id: r.recommend_id || "",
+
+    // 적립금
+    total_mileage: parseFloat(r.total_mileage) || 0,
+    available_mileage: parseFloat(r.available_mileage) || 0,
+
+    // 개인정보 미수집: name, nick_name, birthday, gender, phone, cellphone, email
+  };
+
+  // people.set으로 유저 프로퍼티도 업데이트
+  mp.people.set(r.member_id, {
+    $created: r.created_date || "",
+    member_id: r.member_id || "",
+    group_no: r.group_no || "",
+    marketing_sms: r.sms === "T",
+    marketing_email: r.news_mail === "T",
+    use_mobile_app: r.use_mobile_app === "T",
+    member_type: r.member_type || "",
+    recommend_id: r.recommend_id || "",
+    total_mileage: parseFloat(r.total_mileage) || 0,
+    available_mileage: parseFloat(r.available_mileage) || 0,
+  });
+
+  mp.track("Complete Sign Up", props);
+  console.log("[PF] Complete Sign Up tracked:", r.member_id);
+  res.json({ success: true });
+}
+
+// ============================================================
+// SNS Account Linking (event_no: 90063)
+// 샘플 페이로드: resource.member_id, social_name, social_member_code
+// ============================================================
+function handleSNSAccountLinking(data, res) {
+  const r = data.resource || {};
+
+  const props = {
+    mall_id: r.mall_id || "",
+    shop_no: r.event_shop_no || 1,
+    distinct_id: r.member_id || "",
+    member_id: r.member_id || "",
+    social_name: r.social_name || "", // kakao, naver 등
+    $insert_id: "sns_link_" + r.member_id + "_" + r.social_name,
+  };
+
+  mp.track("Link SNS Account", props);
+  console.log("[PF] Link SNS Account tracked:", r.member_id, r.social_name);
+  res.json({ success: true });
+}
+
+// ============================================================
+// Sign In (event_no: 90143)
+// 샘플 페이로드: resource.member_id, group_name, inflow_name
+// inflow_name: "PC" / "Mobile"
+// ============================================================
+function handleSignIn(data, res) {
+  const r = data.resource || {};
+
+  const props = {
+    mall_id: r.mall_id || "",
+    shop_no: r.event_shop_no || 1,
+    distinct_id: r.member_id || "",
+    member_id: r.member_id || "",
+    group_name: r.group_name || "",
+    inflow_name: r.inflow_name || "", // PC / Mobile
+    is_mobile: r.inflow_name === "Mobile",
+  };
+
+  mp.track("Sign In", props);
+  console.log("[PF] Sign In tracked:", r.member_id, "/", r.inflow_name);
+  res.json({ success: true });
+}
+
+// ============================================================
+// 웹훅 수신 - 주문 (생성 / 취소)
+// ============================================================
 app.post("/webhook/order", function (req, res) {
-  // 수신된 전체 바디 로그 (member_id 등 실제 필드명 확인용)
-  console.log("[PF] 웹훅 수신 바디 전체:", JSON.stringify(req.body, null, 2));
+  console.log("[PF] 웹훅 수신 바디:", JSON.stringify(req.body, null, 2));
 
   if (!verifyCafe24Signature(req)) {
     return res.status(401).json({ error: "Invalid signature" });
@@ -189,21 +281,24 @@ app.post("/webhook/order", function (req, res) {
   const resource = data.resource || {};
   const eventCode = resource.event_code || "";
 
-  // member_id 관련 필드 전체 출력 (실제 필드명 확인용)
   console.log("[PF] member 관련 필드:", {
     member_id: resource.member_id,
     buyer_id: resource.buyer_id,
     user_id: resource.user_id,
-    member_email: resource.member_email,
     buyer_member_id: resource.buyer_member_id,
   });
-  console.log("[PF] 웹훅 이벤트:", eventCode, "/ 주문번호:", resource.order_id);
+  console.log("[PF] 이벤트:", eventCode, "주문번호:", resource.order_id);
 
   if (eventCode === "create_order") {
     handleCompleteOrder(data, res);
     return;
   }
-  if (eventCode === "cancel_order") {
+
+  if (
+    eventCode === "cancel_order" ||
+    eventCode === "create_order_cancel" ||
+    eventCode === "create_order_cancel_all"
+  ) {
     handleCancelOrder(data, res);
     return;
   }
@@ -211,16 +306,13 @@ app.post("/webhook/order", function (req, res) {
   res.json({ success: true, skipped: eventCode });
 });
 
+// ============================================================
+// payment_gateway 해석 (무통장 등 빈 스트링 대응)
+// ============================================================
 function resolvePaymentGateway(r) {
-  // gateway명이 있으면 그대로 사용
-  if (r.payment_gateway_name && r.payment_gateway_name.trim()) {
+  if (r.payment_gateway_name && r.payment_gateway_name.trim())
     return r.payment_gateway_name.trim();
-  }
-  // easypay명이 있으면 사용 (네이버페이, 카카오페이 등 간편결제)
-  if (r.easypay_name && r.easypay_name.trim()) {
-    return r.easypay_name.trim();
-  }
-  // 빈 스트링인 경우 payment_method 코드로 추론
+  if (r.easypay_name && r.easypay_name.trim()) return r.easypay_name.trim();
   const methodMap = {
     cash: "무통장입금",
     tcash: "실시간계좌이체",
@@ -229,17 +321,19 @@ function resolvePaymentGateway(r) {
     cell: "휴대폰결제",
     mileage: "적립금",
     deposit: "예치금",
+    point: "포인트",
+    credit: "예치금",
   };
   return methodMap[r.payment_method] || r.payment_method || "";
 }
 
+// ============================================================
+// Complete Order (event_code: create_order)
+// ============================================================
 function handleCompleteOrder(data, res) {
   const r = data.resource || {};
-
-  // distinct_id: 회원이면 member_id, 비회원이면 guest_{order_id}
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
 
-  // 상품 목록 파싱
   const productCodes = r.ordering_product_code
     ? r.ordering_product_code.split(",").map((s) => s.trim())
     : [];
@@ -252,9 +346,6 @@ function handleCompleteOrder(data, res) {
     item_product_name: productNames[i] || "",
   }));
 
-  // 첫 번째 상품명 (order_first_item_name)
-  const firstItemName = productNames[0] || "";
-
   const props = {
     mall_id: r.mall_id || "",
     shop_no: r.event_shop_no || 1,
@@ -266,8 +357,6 @@ function handleCompleteOrder(data, res) {
     order_date: r.order_date || "",
     payment_date: r.payment_date || "",
     buyer_social_service_name: r.buyer_social_service_name || "",
-
-    // 주문 정보
     payment_method: r.payment_method || "",
     payment_gateway: resolvePaymentGateway(r),
     order_place: r.order_place_name || "",
@@ -275,24 +364,17 @@ function handleCompleteOrder(data, res) {
     currency: r.currency || "KRW",
     is_paid: r.paid === "T",
     order_from_mobile: r.order_from_mobile === "T",
-
-    // 금액
     order_price_amount: parseFloat(r.order_price_amount) || 0,
     actual_payment_amount: parseFloat(r.actual_payment_amount) || 0,
     mileage_spent_amount: parseFloat(r.mileage_spent_amount) || 0,
     membership_discount_amount: parseFloat(r.membership_discount_amount) || 0,
     shipping_fee: parseFloat(r.shipping_fee) || 0,
-
-    // 배송
     shipping_type: r.shipping_type || "",
     shipping_status: r.shipping_status || "",
-
-    // 상품 요약
-    order_first_item_name: firstItemName,
+    order_first_item_name: productNames[0] || "",
     order_item_count: productCodes.length,
     order_detail: items,
-
-    // 개인정보 미수집: buyer_name, buyer_email, buyer_cellphone, buyer_phone 제외
+    // 개인정보 미수집: buyer_name, buyer_email, buyer_cellphone 제외
   };
 
   mp.track("Complete Order", props);
@@ -305,6 +387,9 @@ function handleCompleteOrder(data, res) {
   res.json({ success: true });
 }
 
+// ============================================================
+// Cancel Order
+// ============================================================
 function handleCancelOrder(data, res) {
   const r = data.resource || {};
   const distinctId = r.member_id ? r.member_id : "guest_" + r.order_id;
@@ -333,6 +418,9 @@ function handleCancelOrder(data, res) {
   res.json({ success: true });
 }
 
+// ============================================================
+// 헬스체크 & 디버그
+// ============================================================
 app.get("/health", function (req, res) {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
