@@ -421,10 +421,11 @@ function handleCancelOrder(data, res) {
 // ============================================================
 // 헬스체크 & 디버그
 // ============================================================
+/*
 app.get("/health", function (req, res) {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
-
+*/
 app.post("/webhook/debug", function (req, res) {
   console.log("[DEBUG] Headers:", JSON.stringify(req.headers, null, 2));
   console.log("[DEBUG] Body:", JSON.stringify(req.body, null, 2));
