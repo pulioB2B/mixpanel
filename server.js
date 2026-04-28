@@ -373,7 +373,14 @@ function handleCompleteOrder(data, res) {
     shipping_status: r.shipping_status || "",
     order_first_item_name: productNames[0] || "",
     order_item_count: productCodes.length,
-    order_detail: items,
+    item_detail: items,
+    order_detail: {
+      payment_amount: parseFloat(r.actual_payment_amount) || 0,
+      order_price_amount: parseFloat(r.order_price_amount) || 0,
+      mileage_spent_amount: parseFloat(r.mileage_spent_amount) || 0,
+      membership_discount_amount: parseFloat(r.membership_discount_amount) || 0,
+      shipping_fee: parseFloat(r.shipping_fee) || 0,
+    },
     // 개인정보 미수집: buyer_name, buyer_email, buyer_cellphone 제외
   };
 
