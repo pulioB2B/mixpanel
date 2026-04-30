@@ -373,7 +373,7 @@ function handleCompleteOrder(data, res) {
     shipping_status: r.shipping_status || "",
     order_first_item_name: productNames[0] || "",
     order_item_count: productCodes.length,
-    item_detail: items,
+    items_detail: items,
     order_detail: {
       payment_amount: parseFloat(r.actual_payment_amount) || 0,
       order_price_amount: parseFloat(r.order_price_amount) || 0,
