@@ -210,6 +210,7 @@ function handleCompleteSignUp(data, res) {
     $created: r.created_date || "",
     member_id: r.member_id || "",
     group_no: r.group_no || "",
+    gender: r.gender || "",
     marketing_sms: r.sms === "T",
     marketing_email: r.news_mail === "T",
     use_mobile_app: r.use_mobile_app === "T",
