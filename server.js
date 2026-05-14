@@ -196,6 +196,7 @@ function handleCompleteSignUp(data, res) {
     use_mobile_app: r.use_mobile_app === "T",
     member_type: r.member_type || "", // p:개인 c:사업자 f:외국인
     recommend_id: r.recommend_id || "",
+    gender: r.gender || "",
 
     // 적립금
     total_mileage: parseFloat(r.total_mileage) || 0,
