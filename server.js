@@ -175,11 +175,10 @@ app.post("/webhook/member", function (req, res) {
 // resource.member_id, group_no, created_date, member_authentication,
 // sms, news_mail, total_mileage, available_mileage,
 // recommend_id, use_mobile_app, member_type
-// 개인정보 미수집: name, nick_name, birthday, gender, phone, cellphone, email
+// 개인정보 미수집: name, nick_name, gender, phone, cellphone, email
 // ============================================================
 function handleCompleteSignUp(data, res) {
   const r = data.resource || {};
-  console.log(r.birthday, "회원가입한 유저의 버스데이");
   const props = {
     mall_id: r.mall_id || "",
     shop_no: r.event_shop_no || 1,
@@ -197,6 +196,7 @@ function handleCompleteSignUp(data, res) {
     member_type: r.member_type || "", // p:개인 c:사업자 f:외국인
     recommend_id: r.recommend_id || "",
     gender: r.gender || "",
+    birthday: parseInt(r.birthday.split("-")[0], 10) || "",
 
     // 적립금
     total_mileage: parseFloat(r.total_mileage) || 0,
@@ -215,6 +215,7 @@ function handleCompleteSignUp(data, res) {
     marketing_email: r.news_mail === "T",
     use_mobile_app: r.use_mobile_app === "T",
     member_type: r.member_type || "",
+    birthday: parseInt(r.birthday.split("-")[0], 10) || "",
     recommend_id: r.recommend_id || "",
     total_mileage: parseFloat(r.total_mileage) || 0,
     available_mileage: parseFloat(r.available_mileage) || 0,
