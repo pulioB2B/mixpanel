@@ -179,7 +179,7 @@ app.post("/webhook/member", function (req, res) {
 // ============================================================
 function handleCompleteSignUp(data, res) {
   const r = data.resource || {};
-
+  console.log(r.birthday, "회원가입한 유저의 버스데이");
   const props = {
     mall_id: r.mall_id || "",
     shop_no: r.event_shop_no || 1,
@@ -202,7 +202,7 @@ function handleCompleteSignUp(data, res) {
     total_mileage: parseFloat(r.total_mileage) || 0,
     available_mileage: parseFloat(r.available_mileage) || 0,
 
-    // 개인정보 미수집: name, nick_name, birthday, gender, phone, cellphone, email
+    // 개인정보 미수집: name, nick_name, gender, phone, cellphone, email
   };
 
   // people.set으로 유저 프로퍼티도 업데이트
